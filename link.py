@@ -16,19 +16,21 @@ Set the shutter to begin live streaming
 Unset the shutter to stop live streaming
 """
 
-import sys
 import os
+import sys
 
-# Get the current directory of app.py
+# Get the current directory of link.py
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
-submodule_path = os.path.join(current_dir, 'OpenGoPro', 
-                              'demos', 'python', 'tutorial', 
-                              'tutorial_modules')
-# Add the submodule path to the Python path
+# Construct the full path to tutorial_modules
+submodule_path = os.path.join(
+    current_dir, 
+    'OpenGoPro', 'demos', 'python', 'tutorial'
+)
+
+# Add the submodule path to sys.path before importing
 sys.path.append(submodule_path)
 
-# Your app code using the submodule follows here...
 
 import asyncio
 import argparse
@@ -37,9 +39,67 @@ from typing import Generator, Final
 from bleak import BleakClient
 from tutorial_modules import GoProUuid, connect_ble, proto, connect_to_access_point, ResponseManager, logger
 
+async def set_shutter(manager: ResponseManager):
+    """Set shutter in order to start/stop live stream
 
-async def connect_to_server(serveraddr: str) -> None:
-    pass
+    Args: 
+        manager (ResponseManager): manager used to perform the operation
+
+    Raises:
+        RuntimeError: Received unexpected response.
+
+    Returns: 
+        Not sure what yet
+    """
+    logger.info(msg="Setting the shutter on")
+
+    request = bytes([3, 1, 1, 1])
+    logger.debug(f"Writing to {GoProUuid.COMMAND_REQ_UUID}: {request.hex(':')}")
+    await manager.client.write_gatt_char(GoProUuid.COMMAND_REQ_UUID.value, request, response=True)
+    while response := await manager.get_next_response_as_protobuf():
+        if response.feature_id != 0x72:
+            raise RuntimeError("Only expect to receive Feature ID 0x72 responses after scan request")
+        if response.action_id == 0x73:  # Initial Scan Response
+            manager.assert_generic_protobuf_success(response.data)
+        else:
+            raise RuntimeError("Only expect to receive Action ID 0x72 or 0x73 responses after scan request")
+    raise RuntimeError("Loop should not exit without return")
+async def set_live_stream_mode(manager: ResponseManager, serveraddr: str) -> None:
+    """Configure Live Streaming
+
+    Args: 
+        manager (ResponseManager): manager used to perform the operation
+        serveraddr: RTMP Server Address on the local network
+
+    Raises:
+        RuntimeError: Received unexpected response.
+
+    Returns: 
+        Not sure what yet
+    """
+
+    logger.info(msg="Setting Live Stream Mode")
+
+    start_live_stream_configure = bytearray(
+        [
+            0xF1,  # Feature ID
+            0x79,  # Action ID
+            *proto.RequestSetLiveStreamMode(url=serveraddr, encode=False).SerializePartialToString(),
+        ]
+    )
+    start_live_stream_configure.insert(0, len(start_live_stream_configure))
+
+    # Send the livestream configure request
+    logger.debug(f"Writing: {start_live_stream_configure.hex(':')}")
+    await manager.client.write_gatt_char(GoProUuid.COMMAND_REQ_UUID.value, start_live_stream_configure, response=True)
+    while response := await manager.get_next_response_as_protobuf():
+        if response.feature_id != 0xF1:
+            raise RuntimeError("Only expect to receive Feature ID 0xF1 responses after scan request")
+        if response.action_id == 0xF9:  # Initial Scan Response
+            manager.assert_generic_protobuf_success(response.data)
+        else:
+            raise RuntimeError("Only expect to receive Action ID 0xF1 or 0xF9 responses after scan request")
+    raise RuntimeError("Loop should not exit without return")
 
 async def main(ssid: str, password: str, serveraddr: str, identifier: str | None = None) -> str:
     manager = ResponseManager()
@@ -47,6 +107,13 @@ async def main(ssid: str, password: str, serveraddr: str, identifier: str | None
         client = await connect_ble(manager.notification_handler, identifier)
         manager.set_client(client)
         await connect_to_access_point(manager, ssid, password)
+        await set_live_stream_mode(manager, serveraddr)
+
+        await asyncio.sleep(2)
+
+        await set_shutter(manager)
+
+
 
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error(repr(exc))
