@@ -1,0 +1,3 @@
+[submodule "OpenGoPro"]
+	path = OpenGoPro
+	url = https://github.com/gopro/OpenGoPro.git
